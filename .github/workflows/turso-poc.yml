@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Verify isolated connection, or run the separately gated 1000-work sample
+        description: Verify, bounded sample, or approved 80%-guarded growth toward 500K
         type: choice
-        options: [verify, sample]
+        options: [verify, sample, grow]
         default: verify
         required: true
       run_id:
@@ -28,23 +28,24 @@ concurrency:
 jobs:
   catalogue-poc:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.operation == 'grow' && 330 || 30 }}
     defaults:
       run:
         working-directory: book-app
     env:
-      SOURCE_SHA: 128cb787a0919bd79c09c2929ea86d02200fe907
+      SOURCE_SHA: 736c4c7b72efdb7537cfd15f55480491f77b70da
       INPUT_OPERATION: ${{ inputs.operation }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       INPUT_SNAPSHOT: ${{ inputs.snapshot }}
       SAMPLE_APPROVED_SHA: ${{ vars.TURSO_POC_SAMPLE_APPROVED_SHA }}
+      GROW_APPROVED_SHA: ${{ vars.TURSO_POC_GROW_APPROVED_SHA }}
     steps:
       - name: Validate bounded operation and sample gate
         working-directory: .
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$INPUT_OPERATION" == verify || "$INPUT_OPERATION" == sample ]]
+          [[ "$INPUT_OPERATION" == verify || "$INPUT_OPERATION" == sample || "$INPUT_OPERATION" == grow ]]
           if [[ "$INPUT_OPERATION" == sample ]]; then
             [[ "$INPUT_RUN_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]]
             [[ "$INPUT_SNAPSHOT" == auto || "$INPUT_SNAPSHOT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
@@ -53,13 +54,17 @@ jobs:
               exit 1
             fi
           fi
+          if [[ "$INPUT_OPERATION" == grow && "$GROW_APPROVED_SHA" != "$SOURCE_SHA" ]]; then
+            echo 'Growth is locked until independent quota/resume checks and account verification pass.'
+            exit 1
+          fi
           echo "Immutable Turso POC source: $SOURCE_SHA"
           echo 'No Neon credentials, application deployment, database replica, or dump artifacts are used.'
       - name: Check out immutable POC source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: StMichael9/Book-app
-          ref: 128cb787a0919bd79c09c2929ea86d02200fe907
+          ref: 736c4c7b72efdb7537cfd15f55480491f77b70da
           path: book-app
           persist-credentials: false
       - name: Set up Python
@@ -69,23 +74,26 @@ jobs:
       - name: Install pinned pure HTTP dependencies only
         run: python -m pip install --disable-pip-version-check -r tools/catalogue_poc/requirements.txt
       - name: Run in-memory tests without credentials
-        run: python -m unittest tools.catalogue_poc.tests.test_poc -v
+        run: python -m unittest discover -s tools/catalogue_poc/tests -v
       - name: Verify isolated Turso capabilities
         if: inputs.operation == 'verify'
         env:
           CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
           CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
+          CATALOGUE_ACCOUNT_GUARD: required
+          TURSO_CATALOGUE_USAGE_TOKEN: ${{ secrets.TURSO_CATALOGUE_USAGE_TOKEN }}
         run: |
           python -m tools.catalogue_poc.cli init
-          python -m tools.catalogue_poc.remote_smoke
           python -m tools.catalogue_poc.cli status
-          echo '### Turso connection verification passed (no books imported)' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Turso quota/connection verification passed (no new books imported)' >> "$GITHUB_STEP_SUMMARY"
       - name: Run one bounded sample session (no automatic continuation)
         if: inputs.operation == 'sample'
         env:
           CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
           CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
           CATALOGUE_POC_REMOTE_JOB_APPROVED: 'yes'
+          CATALOGUE_ACCOUNT_GUARD: required
+          TURSO_CATALOGUE_USAGE_TOKEN: ${{ secrets.TURSO_CATALOGUE_USAGE_TOKEN }}
           OPEN_LIBRARY_USER_AGENT: ${{ vars.CATALOGUE_USER_AGENT }}
         shell: bash
         run: |
@@ -107,5 +115,36 @@ jobs:
             exit "$result"
           else
             echo '### Sample finished; larger stages still require measured capacity review' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Continue pinned catalogue toward 500K under the 80 percent ceiling
+        if: inputs.operation == 'grow'
+        env:
+          CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
+          CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
+          CATALOGUE_ACCOUNT_GUARD: required
+          TURSO_CATALOGUE_USAGE_TOKEN: ${{ secrets.TURSO_CATALOGUE_USAGE_TOKEN }}
+          CATALOGUE_POC_REMOTE_JOB_APPROVED: 'yes'
+          OPEN_LIBRARY_USER_AGENT: ${{ vars.CATALOGUE_USER_AGENT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tools.catalogue_poc.cli init
+          set +e
+          python -m tools.catalogue_poc.grow | tee "$RUNNER_TEMP/turso-session.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo '### Turso-only guarded session result' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'quota_threshold|quota_stop|"status": "complete"' "$RUNNER_TEMP/turso-session.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
+          if [[ "$result" == 75 ]]; then
+            if grep -q '"quota_stop": true' "$RUNNER_TEMP/turso-session.log"; then
+              echo 'STOP: quota/account guard paused the import. Do not resume without review/user direction.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'PAUSED: time/session checkpoint retained. Check progress before a same-guard continuation.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [[ "$result" != 0 ]]; then
+            echo 'FAILED: inspect the relevant error. No automatic retry or target/limit change.' >> "$GITHUB_STEP_SUMMARY"
+            exit "$result"
+          else
+            echo 'Finished the approved stages; verify counts/integrity before claiming completion.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
