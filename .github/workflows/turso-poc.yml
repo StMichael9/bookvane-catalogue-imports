@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: book-app
     env:
-      SOURCE_SHA: a65fce68286f0333c39fe748ae01d1cb1e386c9f
+      SOURCE_SHA: 128cb787a0919bd79c09c2929ea86d02200fe907
       INPUT_OPERATION: ${{ inputs.operation }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       INPUT_SNAPSHOT: ${{ inputs.snapshot }}
@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: StMichael9/Book-app
-          ref: a65fce68286f0333c39fe748ae01d1cb1e386c9f
+          ref: 128cb787a0919bd79c09c2929ea86d02200fe907
           path: book-app
           persist-credentials: false
       - name: Set up Python
