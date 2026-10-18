@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: book-app
     env:
-      SOURCE_SHA: 736c4c7b72efdb7537cfd15f55480491f77b70da
+      SOURCE_SHA: da2f2742c96d670eea928c33799682154a43e28a
       INPUT_OPERATION: ${{ inputs.operation }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       INPUT_SNAPSHOT: ${{ inputs.snapshot }}
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: StMichael9/Book-app
-          ref: 736c4c7b72efdb7537cfd15f55480491f77b70da
+          ref: da2f2742c96d670eea928c33799682154a43e28a
           path: book-app
           persist-credentials: false
       - name: Set up Python
@@ -134,12 +134,14 @@ jobs:
           result=${PIPESTATUS[0]}
           set -e
           echo '### Turso-only guarded session result' >> "$GITHUB_STEP_SUMMARY"
-          grep -E 'quota_threshold|quota_stop|"status": "complete"' "$RUNNER_TEMP/turso-session.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
+          grep -E 'quota_threshold|quota_stop|"status": "complete"|"status": "stopped"' "$RUNNER_TEMP/turso-session.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
           if [[ "$result" == 75 ]]; then
             if grep -q '"quota_stop": true' "$RUNNER_TEMP/turso-session.log"; then
               echo 'STOP: quota/account guard paused the import. Do not resume without review/user direction.' >> "$GITHUB_STEP_SUMMARY"
+            elif grep -q '"pause_kind": "time"' "$RUNNER_TEMP/turso-session.log" && grep -q '"resume_allowed": true' "$RUNNER_TEMP/turso-session.log"; then
+              echo 'PAUSED: time-only checkpoint retained. Check progress before a same-guard continuation.' >> "$GITHUB_STEP_SUMMARY"
             else
-              echo 'PAUSED: time/session checkpoint retained. Check progress before a same-guard continuation.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'STOP: capacity/unknown safety pause. No automatic continuation; review required.' >> "$GITHUB_STEP_SUMMARY"
             fi
           elif [[ "$result" != 0 ]]; then
             echo 'FAILED: inspect the relevant error. No automatic retry or target/limit change.' >> "$GITHUB_STEP_SUMMARY"
