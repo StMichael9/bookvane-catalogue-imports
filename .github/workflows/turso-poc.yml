@@ -1,0 +1,108 @@
+name: Turso catalogue POC (isolated)
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Verify isolated connection, or run the separately gated 1000-work sample
+        type: choice
+        options: [verify, sample]
+        default: verify
+        required: true
+      run_id:
+        description: Saved Turso-only run ID (sample only; reuse to resume)
+        type: string
+        default: turso-poc-sample-001
+      snapshot:
+        description: Pinned date or auto at first start only (sample only)
+        type: string
+        default: auto
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turso-catalogue-poc
+  cancel-in-progress: false
+
+jobs:
+  catalogue-poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: book-app
+    env:
+      SOURCE_SHA: 0ac9112963f1d18d46d1c034183610ec438db57e
+      INPUT_OPERATION: ${{ inputs.operation }}
+      INPUT_RUN_ID: ${{ inputs.run_id }}
+      INPUT_SNAPSHOT: ${{ inputs.snapshot }}
+      SAMPLE_APPROVED_SHA: ${{ vars.TURSO_POC_SAMPLE_APPROVED_SHA }}
+    steps:
+      - name: Validate bounded operation and sample gate
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$INPUT_OPERATION" == verify || "$INPUT_OPERATION" == sample ]]
+          if [[ "$INPUT_OPERATION" == sample ]]; then
+            [[ "$INPUT_RUN_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]]
+            [[ "$INPUT_SNAPSHOT" == auto || "$INPUT_SNAPSHOT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+            if [[ "$SAMPLE_APPROVED_SHA" != "$SOURCE_SHA" ]]; then
+              echo 'Sample is locked: independent ingestion checks and account overages/quota proof must pass first.'
+              exit 1
+            fi
+          fi
+          echo "Immutable Turso POC source: $SOURCE_SHA"
+          echo 'No Neon credentials, application deployment, database replica, or dump artifacts are used.'
+      - name: Check out immutable POC source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: StMichael9/Book-app
+          ref: 0ac9112963f1d18d46d1c034183610ec438db57e
+          path: book-app
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned pure HTTP dependencies only
+        run: python -m pip install --disable-pip-version-check -r tools/catalogue_poc/requirements.txt
+      - name: Run in-memory tests without credentials
+        run: python -m unittest tools.catalogue_poc.tests.test_poc -v
+      - name: Verify isolated Turso capabilities
+        if: inputs.operation == 'verify'
+        env:
+          CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
+          CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
+        run: |
+          python -m tools.catalogue_poc.remote_smoke
+          python -m tools.catalogue_poc.cli status
+          echo '### Turso connection verification passed (no books imported)' >> "$GITHUB_STEP_SUMMARY"
+      - name: Run one bounded sample session (no automatic continuation)
+        if: inputs.operation == 'sample'
+        env:
+          CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
+          CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
+          CATALOGUE_POC_REMOTE_JOB_APPROVED: 'yes'
+          OPEN_LIBRARY_USER_AGENT: ${{ vars.CATALOGUE_USER_AGENT }}
+        shell: bash
+        run: |
+          set +e
+          python -m tools.catalogue_poc.cli ingest \
+            --run-id "$INPUT_RUN_ID" --snapshot "$INPUT_SNAPSHOT" \
+            --target-works 1000 --batch-size 50 --time-budget-seconds 1200 \
+            --max-storage-bytes 250000000 --max-session-rows-written 100000
+          result=$?
+          set -e
+          python -m tools.catalogue_poc.cli status
+          if [[ "$result" == 75 ]]; then
+            echo '### Sample paused safely; checkpoint retained, not a completed catalogue' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Review throughput, source integrity and account usage before continuation.' >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$result" != 0 ]]; then
+            echo '### Sample failed; do not retry or increase limits without reviewing the error' >> "$GITHUB_STEP_SUMMARY"
+            exit "$result"
+          else
+            echo '### Sample finished; larger stages still require measured capacity review' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
