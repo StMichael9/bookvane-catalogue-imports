@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: book-app
     env:
-      SOURCE_SHA: 0ac9112963f1d18d46d1c034183610ec438db57e
+      SOURCE_SHA: 128cb787a0919bd79c09c2929ea86d02200fe907
       INPUT_OPERATION: ${{ inputs.operation }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       INPUT_SNAPSHOT: ${{ inputs.snapshot }}
@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: StMichael9/Book-app
-          ref: 0ac9112963f1d18d46d1c034183610ec438db57e
+          ref: 128cb787a0919bd79c09c2929ea86d02200fe907
           path: book-app
           persist-credentials: false
       - name: Set up Python
@@ -76,6 +76,7 @@ jobs:
           CATALOGUE_TURSO_URL: libsql://bookvane-catalogue-poc-stmichael9.aws-us-west-2.turso.io
           CATALOGUE_TURSO_TOKEN: ${{ secrets.TURSO_CATALOGUE_POC_TOKEN }}
         run: |
+          python -m tools.catalogue_poc.cli init
           python -m tools.catalogue_poc.remote_smoke
           python -m tools.catalogue_poc.cli status
           echo '### Turso connection verification passed (no books imported)' >> "$GITHUB_STEP_SUMMARY"
@@ -88,6 +89,8 @@ jobs:
           OPEN_LIBRARY_USER_AGENT: ${{ vars.CATALOGUE_USER_AGENT }}
         shell: bash
         run: |
+          set -euo pipefail
+          python -m tools.catalogue_poc.cli init
           set +e
           python -m tools.catalogue_poc.cli ingest \
             --run-id "$INPUT_RUN_ID" --snapshot "$INPUT_SNAPSHOT" \
