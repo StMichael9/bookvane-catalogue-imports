@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: book-app
     env:
-      SOURCE_SHA: da2f2742c96d670eea928c33799682154a43e28a
+      SOURCE_SHA: 2526cea33bde5c9ec4e2cad034a1c4eb00c3b492
       INPUT_OPERATION: ${{ inputs.operation }}
       INPUT_RUN_ID: ${{ inputs.run_id }}
       INPUT_SNAPSHOT: ${{ inputs.snapshot }}
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: StMichael9/Book-app
-          ref: da2f2742c96d670eea928c33799682154a43e28a
+          ref: 2526cea33bde5c9ec4e2cad034a1c4eb00c3b492
           path: book-app
           persist-credentials: false
       - name: Set up Python
@@ -134,7 +134,7 @@ jobs:
           result=${PIPESTATUS[0]}
           set -e
           echo '### Turso-only guarded session result' >> "$GITHUB_STEP_SUMMARY"
-          grep -E 'quota_threshold|quota_stop|"status": "complete"|"status": "stopped"' "$RUNNER_TEMP/turso-session.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
+          grep -E 'source_retry|source_failure|quota_threshold|quota_stop|"status": "complete"|"status": "stopped"' "$RUNNER_TEMP/turso-session.log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY" || true
           if [[ "$result" == 75 ]]; then
             if grep -q '"quota_stop": true' "$RUNNER_TEMP/turso-session.log"; then
               echo 'STOP: quota/account guard paused the import. Do not resume without review/user direction.' >> "$GITHUB_STEP_SUMMARY"
